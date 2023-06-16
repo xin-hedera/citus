@@ -1866,7 +1866,7 @@ CREATE CAST (timestamptz AS bigint) WITH FUNCTION timestamptz_to_nanos(timestamp
 CREATE TABLE bigint_partitioned_table (timestamp bigint, description text) partition by range (timestamp);
 
 BEGIN;
-  SELECT create_time_partitions('bigint_partitioned_table', INTERVAL '1 month', '2023-05-01', '2023-01-1');
+  SELECT create_time_partitions('bigint_partitioned_table', INTERVAL '1 month', '2023-05-01', '2023-01-01');
   SELECT * FROM time_partitions WHERE parent_table = 'bigint_partitioned_table'::regclass ORDER BY 3;
 ROLLBACK;
 
@@ -1970,6 +1970,53 @@ DROP TABLE date_partitioned_table_to_exp;
 DROP TABLE date_partitioned_citus_local_table CASCADE;
 DROP TABLE date_partitioned_citus_local_table_2;
 set client_min_messages to notice;
+
+-- 5) test with bigint partition column
+CREATE FUNCTION nanos_to_timestamptz(nanos bigint) RETURNS timestamptz LANGUAGE plpgsql AS
+$$
+DECLARE
+  value timestamptz;
+BEGIN
+  select to_timestamp(nanos * 1.0 / 1000000000) into value;
+  return value;
+END;
+$$;
+CREATE CAST (bigint AS timestamptz) WITH FUNCTION nanos_to_timestamptz(bigint);
+
+CREATE FUNCTION timestamptz_to_nanos(ts timestamptz) RETURNS bigint LANGUAGE plpgsql AS
+$$
+DECLARE
+  value bigint;
+BEGIN
+  select extract(epoch from ts) * 1000000000 into value;
+  return value;
+END;
+$$;
+CREATE CAST (timestamptz AS bigint) WITH FUNCTION timestamptz_to_nanos(timestamptz);
+
+CREATE TABLE bigint_partitioned_table (timestamp bigint, description text) partition by range (timestamp);
+CREATE TABLE bigint_partitioned_table_00 PARTITION OF bigint_partitioned_table FOR VALUES FROM ('1672560000000000000') TO ('1675238400000000000')
+CREATE TABLE bigint_partitioned_table_01 PARTITION OF bigint_partitioned_table FOR VALUES FROM ('1675238400000000000') TO ('1677657600000000000')
+CREATE TABLE bigint_partitioned_table_02 PARTITION OF bigint_partitioned_table FOR VALUES FROM ('1677657600000000000') TO ('1680332400000000000')
+INSERT INTO bigint_partitioned_table VALUES (1672560000000000000, 'description 1');
+INSERT INTO bigint_partitioned_table VALUES (1675238400000000001, 'description 2');
+INSERT INTO bigint_partitioned_table VALUES (1677657600000000002, 'description 3');
+
+\set VERBOSITY terse
+
+-- expire no partitions
+CALL drop_old_time_partitions('bigint_partitioned_table', '2023-01-01');
+SELECT partition FROM time_partitions WHERE parent_table = 'bigint_partitioned_table'::regclass ORDER BY partition::text;
+
+-- expire 2 old partitions
+CALL drop_old_time_partitions('bigint_partitioned_table', '2023-03-01');
+SELECT partition FROM time_partitions WHERE parent_table = 'bigint_partitioned_table'::regclass ORDER BY partition::text;
+
+\set VERBOSITY default
+DROP TABLE bigint_partitioned_table;
+
+DROP CAST (bigint AS timestamptz);
+DROP CAST (timestamptz AS bigint);
 
 -- d) invalid tables for helper UDFs
 CREATE TABLE multiple_partition_column_table(
